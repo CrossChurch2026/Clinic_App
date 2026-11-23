@@ -1,0 +1,75 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---------- helpers ----------
+    function signedIn() { return request.auth != null; }
+    function userPath() { return /databases/$(database)/documents/users/$(request.auth.uid); }
+    function me()       { return get(userPath()).data; }
+    function valid()    { return signedIn() && exists(userPath()) && me().active == true; }
+    function isAdmin()     { return valid() && me().role == 'admin'; }
+    function isDoctor()    { return valid() && me().role == 'doctor'; }
+    function isAssistant() { return valid() && me().role == 'assistant'; }
+    function isStaff()     { return isDoctor() || isAssistant(); }
+
+    // A doctor sees only his own visits; an assistant sees only visits of
+    // the doctors assigned to him (users/{uid}.doctorIds), same clinic.
+    function visitAccess(v) {
+      return isStaff() && v.clinicId == me().clinicId && (
+        (isDoctor()    && v.doctorId == request.auth.uid) ||
+        (isAssistant() && v.doctorId in me().doctorIds)
+      );
+    }
+
+    // ---------- clinics ----------
+    match /clinics/{id} {
+      allow read: if isAdmin() || (isStaff() && id == me().clinicId);
+      allow create, update: if isAdmin();
+      allow delete: if false;
+    }
+
+    // ---------- users (roles live here; only admin can write) ----------
+    match /users/{uid} {
+      allow read: if (signedIn() && request.auth.uid == uid)
+                  || isAdmin()
+                  || (isStaff() && resource.data.clinicId == me().clinicId);
+      allow create, update: if isAdmin();
+      allow delete: if false;
+    }
+
+    // ---------- patients ----------
+    match /patients/{id} {
+      allow read:   if isStaff() && resource.data.clinicId == me().clinicId;
+      allow create: if isStaff() && request.resource.data.clinicId == me().clinicId;
+      allow update: if isStaff() && resource.data.clinicId == me().clinicId
+                                 && request.resource.data.clinicId == me().clinicId;
+      allow delete: if false;
+    }
+
+    // ---------- visits ----------
+    match /visits/{id} {
+      allow read:   if visitAccess(resource.data);
+      allow create: if visitAccess(request.resource.data);
+      allow update: if visitAccess(resource.data)
+                    && request.resource.data.doctorId == resource.data.doctorId
+                    && request.resource.data.clinicId == resource.data.clinicId;
+      allow delete: if false;
+    }
+
+    // ---------- PRIVATE DOCTOR NOTES ----------
+    // Doc id = visit id. Readable/writable ONLY by the doctor who owns the visit.
+    // Assistants and admins get permission-denied, even if they query it directly.
+    match /doctorNotes/{visitId} {
+      // resource == null lets the doctor "get" a note that doesn't exist yet
+      allow get: if isDoctor() && (resource == null || resource.data.doctorId == request.auth.uid);
+      allow list: if false;
+      allow create: if isDoctor()
+                    && request.resource.data.doctorId == request.auth.uid
+                    && get(/databases/$(database)/documents/visits/$(visitId)).data.doctorId == request.auth.uid;
+      allow update: if isDoctor()
+                    && resource.data.doctorId == request.auth.uid
+                    && request.resource.data.doctorId == resource.data.doctorId;
+      allow delete: if false;
+    }
+  }
+}
