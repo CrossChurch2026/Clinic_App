@@ -17,6 +17,16 @@ Structure: **Clinic → Doctor → Doctor Assistant**, plus an **Admin** role fo
 | Doctor | See own visits, patients of the clinic, change visit status, write **private notes** (only he can read them). |
 | Assistant | Register patients, book/reschedule visits, check-in, change status — only for the doctors assigned to him. **No access to notes.** |
 
+## Install on a phone (PWA)
+
+Upload everything, including the `icons/` folder, `manifest.webmanifest` and `sw.js`, to the repo root.
+
+- **Android (Chrome):** open the site → ⋮ menu → **Install app** (or *Add to Home screen*).
+- **iPhone (Safari only):** open the site → Share button → **Add to Home Screen**.
+
+The app then opens full-screen with the clinic logo. Patient data is never stored by the service worker (it only caches the app files); an internet connection is required to use the system.
+Tip: if Google sign-in misbehaves inside the installed iPhone app, sign in with email/password, or sign in once from Safari.
+
 ## Firestore collections
 
 - `clinics/{id}`: name, address, phone, active

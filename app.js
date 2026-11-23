@@ -528,3 +528,8 @@ document.addEventListener("submit", (e) => {
   run(() => forms[f.dataset.form](f, f.dataset.id)).finally(() => { if (btn) btn.disabled = false; });
 });
 $("#modal").addEventListener("click", (e) => { if (e.target.id === "modal") closeModal(); });
+
+/* ---------- installable app (PWA) ---------- */
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => navigator.serviceWorker.register("sw.js").catch(() => {}));
+}

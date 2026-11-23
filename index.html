@@ -4,6 +4,14 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Clinic Visits</title>
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#2f6f8f">
+<link rel="icon" type="image/png" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Clinic Visits">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
 <style>
   :root { --bg:#f4f6f8; --card:#fff; --ink:#1f2933; --muted:#6b7785; --brand:#2f6f8f; --line:#dde3e9; --bad:#b42318; --ok:#1a7f4b; }
   * { box-sizing:border-box; }
@@ -58,13 +66,27 @@
   #toast { position:fixed; bottom:20px; left:50%; transform:translateX(-50%); background:#1f2933; color:#fff; padding:10px 16px; border-radius:8px; opacity:0; transition:.25s; pointer-events:none; z-index:20; }
   #toast.show { opacity:1; } #toast.bad { background:var(--bad); }
   .docs { display:flex; flex-direction:column; gap:4px; margin-bottom:10px; }
+  /* ---- mobile / installed-app tweaks ---- */
+  input, select, textarea { font-size:16px; }               /* stops iOS zoom on focus */
+  body { padding-bottom:env(safe-area-inset-bottom); }
+  header { padding-top:calc(12px + env(safe-area-inset-top)); }
+  @media (max-width:640px) {
+    header, nav { padding-left:12px; padding-right:12px; }
+    nav { overflow-x:auto; }
+    main { margin:12px auto; padding:0 10px; }
+    table { display:block; overflow-x:auto; white-space:nowrap; }
+    #modal { padding:2vh 8px; }
+    #modalBox { padding:16px; }
+    #login { margin:6vh 12px; }
+  }
 </style>
 </head>
 <body>
 
 <section id="login" class="card">
-  <h2>Clinic Visits</h2>
-  <button type="button" id="googleBtn" class="google">Continue with Google</button>
+  <img src="icons/icon-192.png" width="84" height="84" alt="" style="display:block;margin:0 auto 10px;border-radius:20px">
+  <h2 style="text-align:center">Clinic Visits</h2>
+  <button type="button" id="googleBtn" class="google" style="margin-top:16px">Continue with Google</button>
   <div class="or"><span>or</span></div>
   <div class="modes">
     <button type="button" class="on" data-mode="signin">Sign in</button>
