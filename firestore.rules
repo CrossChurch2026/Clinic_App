@@ -33,7 +33,19 @@ service cloud.firestore {
       allow read: if (signedIn() && request.auth.uid == uid)
                   || isAdmin()
                   || (isStaff() && resource.data.clinicId == me().clinicId);
-      allow create, update: if isAdmin();
+
+      // Self-registration: a new user may create ONLY his own profile, and only as
+      // an inactive "pending" account with no clinic and no doctors. He cannot
+      // grant himself a role. Only an admin can approve (update) it.
+      allow create: if isAdmin()
+        || (signedIn() && request.auth.uid == uid
+            && request.resource.data.keys().hasOnly(['name','email','role','active','clinicId','doctorIds','provider','createdAt'])
+            && request.resource.data.role == 'pending'
+            && request.resource.data.active == false
+            && request.resource.data.clinicId == null
+            && request.resource.data.doctorIds.size() == 0
+            && request.resource.data.email == request.auth.token.email);
+      allow update: if isAdmin();
       allow delete: if false;
     }
 

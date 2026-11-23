@@ -42,6 +42,14 @@
   #login { max-width:360px; margin:12vh auto; padding:24px; }
   #login h2 { margin-bottom:16px; }
   .err { color:var(--bad); min-height:20px; margin:6px 0; font-size:13px; }
+  .err.ok { color:var(--ok); }
+  button.google { width:100%; background:#fff; color:var(--ink); border:1px solid var(--line); }
+  .or { text-align:center; color:var(--muted); font-size:12px; margin:14px 0; position:relative; }
+  .or::before { content:""; position:absolute; left:0; right:0; top:50%; border-top:1px solid var(--line); }
+  .or span { position:relative; background:var(--card); padding:0 10px; }
+  .modes { display:flex; gap:4px; margin-bottom:14px; }
+  .modes button { flex:1; background:#e6ebf0; color:var(--ink); }
+  .modes button.on { background:var(--brand); color:#fff; }
   #modal { position:fixed; inset:0; background:rgba(15,23,32,.5); display:flex; align-items:flex-start; justify-content:center; padding:5vh 12px; overflow:auto; z-index:10; }
   #modalBox { background:var(--card); border-radius:10px; padding:20px; width:min(560px,100%); }
   #modalBox h3 { margin-bottom:14px; }
@@ -55,13 +63,21 @@
 <body>
 
 <section id="login" class="card">
-  <h2>Clinic Visits — Sign in</h2>
+  <h2>Clinic Visits</h2>
+  <button type="button" id="googleBtn" class="google">Continue with Google</button>
+  <div class="or"><span>or</span></div>
+  <div class="modes">
+    <button type="button" class="on" data-mode="signin">Sign in</button>
+    <button type="button" data-mode="signup">Create account</button>
+  </div>
   <form id="loginForm" autocomplete="on">
+    <label id="nameRow" hidden>Full name<input name="name" autocomplete="name"></label>
     <label>Email<input type="email" name="email" required autocomplete="username"></label>
-    <label>Password<input type="password" name="password" required autocomplete="current-password"></label>
+    <label>Password<input type="password" name="password" required minlength="6" autocomplete="current-password"></label>
     <div class="err" id="loginErr"></div>
-    <button style="width:100%">Sign in</button>
+    <button id="loginSubmit" style="width:100%">Sign in</button>
   </form>
+  <p class="muted" id="signupHint" hidden style="font-size:13px">New accounts must be approved by the administrator before you can use the system.</p>
 </section>
 
 <div id="app" hidden>

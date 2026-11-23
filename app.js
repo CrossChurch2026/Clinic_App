@@ -1,6 +1,7 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut,
-         createUserWithEmailAndPassword, sendPasswordResetEmail }
+         createUserWithEmailAndPassword, sendPasswordResetEmail,
+         GoogleAuthProvider, signInWithPopup }
   from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import { getFirestore, collection, doc, getDoc, getDocs, setDoc, addDoc, updateDoc,
          query, where, serverTimestamp }
@@ -21,13 +22,14 @@ const fmtDate = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getD
 const today = () => fmtDate(new Date());
 const shiftDate = (s, n) => { const d = new Date(s + "T00:00:00"); d.setDate(d.getDate() + n); return fmtDate(d); };
 
-const ROLE_LABEL = { admin: "Admin", doctor: "Doctor", assistant: "Assistant" };
+const ROLE_LABEL = { admin: "Admin", doctor: "Doctor", assistant: "Assistant", pending: "Pending", rejected: "Rejected" };
 const STATUSES = { SCHEDULED: "Scheduled", CHECKED_IN: "Checked in", IN_PROGRESS: "In progress",
                    COMPLETED: "Completed", CANCELLED: "Cancelled", NO_SHOW: "No show" };
 const VISIT_TYPES = ["First Visit", "Follow-up", "Emergency"];
 
 let me = null, clinic = null, staff = [];
 let clinics = [], users = [], patients = [], visits = [], visitDate = today();
+let signupName = "";
 
 function toast(msg, bad = false) {
   const t = $("#toast");
@@ -48,40 +50,102 @@ const doctorsOfMe = () => me.role === "doctor"
   ? [{ id: me.uid, name: me.name }]
   : staff.filter((s) => s.role === "doctor" && s.active && (me.doctorIds || []).includes(s.id));
 
-/* ---------- auth ---------- */
+/* ---------- login / registration ---------- */
+let mode = "signin";
+function setLoginMsg(text, ok = false) {
+  const el = $("#loginErr"); el.textContent = text; el.classList.toggle("ok", ok);
+}
+function authMessage(e) {
+  switch (e.code) {
+    case "auth/email-already-in-use": return "This email is already registered. Use Sign in.";
+    case "auth/weak-password": return "Password must be at least 6 characters.";
+    case "auth/invalid-email": return "Invalid email address.";
+    case "auth/unauthorized-domain": return "This website domain is not authorized in Firebase (Authentication > Settings > Authorized domains).";
+    case "auth/operation-not-allowed": return "This sign-in method is not enabled in Firebase.";
+    case "auth/too-many-requests": return "Too many attempts. Try again later.";
+    default: return "Invalid email or password.";
+  }
+}
+document.querySelectorAll("[data-mode]").forEach((b) => b.addEventListener("click", () => {
+  mode = b.dataset.mode;
+  document.querySelectorAll("[data-mode]").forEach((x) => x.classList.toggle("on", x === b));
+  const su = mode === "signup";
+  $("#nameRow").hidden = !su; $("#signupHint").hidden = !su;
+  $("#nameRow input").required = su;
+  $("#loginSubmit").textContent = su ? "Create account" : "Sign in";
+  $("#loginForm").elements.password.autocomplete = su ? "new-password" : "current-password";
+  setLoginMsg("");
+}));
 $("#loginForm").addEventListener("submit", async (e) => {
   e.preventDefault();
   const fd = Object.fromEntries(new FormData(e.target));
-  $("#loginErr").textContent = "";
-  try { await signInWithEmailAndPassword(auth, fd.email.trim(), fd.password); }
-  catch { $("#loginErr").textContent = "Invalid email or password."; }
+  setLoginMsg("");
+  try {
+    if (mode === "signup") {
+      signupName = (fd.name || "").trim();
+      if (!signupName) { setLoginMsg("Enter your full name."); return; }
+      await createUserWithEmailAndPassword(auth, fd.email.trim(), fd.password);
+    } else {
+      await signInWithEmailAndPassword(auth, fd.email.trim(), fd.password);
+    }
+  } catch (err) { signupName = ""; setLoginMsg(authMessage(err)); }
+});
+$("#googleBtn").addEventListener("click", async () => {
+  setLoginMsg("");
+  try { await signInWithPopup(auth, new GoogleAuthProvider()); }
+  catch (err) {
+    if (err.code === "auth/popup-closed-by-user" || err.code === "auth/cancelled-popup-request") return;
+    setLoginMsg(authMessage(err));
+  }
 });
 $("#logout").addEventListener("click", () => signOut(auth));
 
 onAuthStateChanged(auth, async (user) => {
   closeModal();
   if (!user) {
-    me = clinic = null; staff = []; clinics = users = patients = visits = [];
+    me = clinic = null; staff = []; clinics = []; users = []; patients = []; visits = [];
     $("#app").hidden = true; $("#login").hidden = false; view.innerHTML = "";
     return;
   }
   try {
-    const snap = await getDoc(doc(db, "users", user.uid));
-    if (!snap.exists() || snap.data().active !== true) {
-      $("#loginErr").textContent = "Your account is not active. Contact the administrator.";
+    const ref = doc(db, "users", user.uid);
+    const snap = await getDoc(ref);
+
+    // First time we see this account (email sign-up or Google): create a PENDING profile.
+    if (!snap.exists()) {
+      await setDoc(ref, {
+        name: (signupName || user.displayName || user.email).trim(),
+        email: user.email, role: "pending", active: false, clinicId: null, doctorIds: [],
+        provider: (user.providerData[0] && user.providerData[0].providerId) || "password",
+        createdAt: serverTimestamp(),
+      });
+      signupName = "";
+      setLoginMsg("Registration received. You can sign in after the administrator approves your account.", true);
       await signOut(auth); return;
     }
-    me = { uid: user.uid, ...snap.data() };
+
+    const d = snap.data();
+    if (d.role === "pending") {
+      setLoginMsg("Your account is waiting for administrator approval.", true);
+      await signOut(auth); return;
+    }
+    if (d.active !== true) {
+      setLoginMsg("Your account is disabled. Contact the administrator.");
+      await signOut(auth); return;
+    }
+
+    me = { uid: user.uid, ...d };
     if (me.role !== "admin") {
       const c = await getDoc(doc(db, "clinics", me.clinicId));
       clinic = c.exists() ? { id: c.id, ...c.data() } : null;
       const s = await getDocs(query(collection(db, "users"), where("clinicId", "==", me.clinicId)));
-      staff = s.docs.map((d) => ({ id: d.id, ...d.data() }));
+      staff = s.docs.map((x) => ({ id: x.id, ...x.data() }));
     }
+    setLoginMsg("");
     showApp();
   } catch (e) {
     console.error(e);
-    $("#loginErr").textContent = "Could not load your profile.";
+    setLoginMsg("Could not load your profile.");
     await signOut(auth);
   }
 });
@@ -94,6 +158,12 @@ function showApp() {
     : [["visits", "Visits"], ["patients", "Patients"]];
   $("#tabs").innerHTML = tabs.map(([k, l]) => `<button data-act="tab" data-tab="${k}">${l}</button>`).join("");
   go(tabs[0][0]);
+  if (me.role === "admin") run(refreshPendingBadge);
+}
+async function refreshPendingBadge() {
+  const s = await getDocs(query(collection(db, "users"), where("role", "==", "pending")));
+  const b = document.querySelector('#tabs [data-tab="users"]');
+  if (b) b.textContent = "Users" + (s.size ? ` (${s.size} pending)` : "");
 }
 async function go(tab) {
   document.querySelectorAll("#tabs button").forEach((b) => b.classList.toggle("on", b.dataset.tab === tab));
@@ -128,15 +198,31 @@ function clinicForm(c = {}) {
 
 /* ---------- ADMIN: users ---------- */
 let secondary = null;
+const providerLabel = (p) => (p === "google.com" ? "Google" : "Email / password");
+const whenOf = (u) => (u.createdAt && u.createdAt.toDate ? u.createdAt.toDate().toLocaleString() : "");
+
 async function renderUsers() {
   const [cs, us] = await Promise.all([getDocs(collection(db, "clinics")), getDocs(collection(db, "users"))]);
   clinics = cs.docs.map((d) => ({ id: d.id, ...d.data() }));
   users = us.docs.map((d) => ({ id: d.id, ...d.data() }));
   const clinicName = (id) => (clinics.find((c) => c.id === id) || {}).name || "—";
+  const pending = users.filter((u) => u.role === "pending");
+  const others = users.filter((u) => u.role !== "pending");
+  const badge = document.querySelector('#tabs [data-tab="users"]');
+  if (badge) badge.textContent = "Users" + (pending.length ? ` (${pending.length} pending)` : "");
+
   view.innerHTML = `
+    ${pending.length ? `
+    <div class="bar"><h2>Pending approvals (${pending.length})</h2></div>
+    <table style="margin-bottom:28px"><thead><tr><th>Name</th><th>Email</th><th>Signed up with</th><th>Requested</th><th></th></tr></thead><tbody>
+    ${pending.map((u) => `<tr><td>${esc(u.name)}</td><td>${esc(u.email)}</td><td>${esc(providerLabel(u.provider))}</td>
+      <td>${esc(whenOf(u))}</td>
+      <td class="row"><button class="sm" data-act="approve-user" data-id="${esc(u.id)}">Approve…</button>
+      <button class="sm ghost" data-act="reject-user" data-id="${esc(u.id)}">Reject</button></td></tr>`).join("")}
+    </tbody></table>` : ""}
     <div class="bar"><h2>Users</h2><button data-act="new-user">+ New User</button></div>
     <table><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Clinic</th><th>Status</th><th></th></tr></thead><tbody>
-    ${users.map((u) => `<tr><td>${esc(u.name)}</td><td>${esc(u.email)}</td><td>${ROLE_LABEL[u.role] || esc(u.role)}</td>
+    ${others.map((u) => `<tr><td>${esc(u.name)}</td><td>${esc(u.email)}</td><td>${esc(ROLE_LABEL[u.role] || u.role)}</td>
       <td>${esc(clinicName(u.clinicId))}</td><td>${u.active ? "Active" : "Inactive"}</td>
       <td class="row"><button class="sm ghost" data-act="edit-user" data-id="${esc(u.id)}">Edit</button>
       <button class="sm ghost" data-act="reset-pw" data-email="${esc(u.email)}">Reset password</button></td></tr>`).join("")
@@ -145,9 +231,29 @@ async function renderUsers() {
 }
 function doctorBox(clinicId, selected = []) {
   const docs = users.filter((u) => u.role === "doctor" && u.clinicId === clinicId);
-  if (!docs.length) return '<span class="muted">No doctors in this clinic yet.</span>';
+  if (!docs.length) return '<span class="muted">No doctors in this clinic yet. Approve a doctor first.</span>';
   return docs.map((d) => `<label class="chk"><input type="checkbox" name="doctorIds" value="${esc(d.id)}"
     ${selected.includes(d.id) ? "checked" : ""}> ${esc(d.name)}</label>`).join("");
+}
+// Shared role / clinic / assigned-doctors fields (new user, approve, edit)
+function accessFields(u = {}) {
+  const roles = [["doctor", "Doctor"], ["assistant", "Doctor Assistant"], ["admin", "Admin"]];
+  const role = roles.some(([k]) => k === u.role) ? u.role : "doctor";
+  const docsHtml = role !== "assistant" ? ""
+    : (u.clinicId ? doctorBox(u.clinicId, u.doctorIds || []) : '<span class="muted">Select a clinic first.</span>');
+  return `
+    <label>Role<select name="role">${roles.map(([k, l]) => `<option value="${k}" ${role === k ? "selected" : ""}>${l}</option>`).join("")}</select></label>
+    <label>Clinic<select name="clinicId"><option value="">— select —</option>
+      ${clinics.filter((c) => c.active !== false || c.id === u.clinicId)
+        .map((c) => `<option value="${esc(c.id)}" ${u.clinicId === c.id ? "selected" : ""}>${esc(c.name)}</option>`).join("")}</select></label>
+    <div id="docWrap" ${role === "assistant" ? "" : "hidden"}><label>Assigned doctors</label><div class="docs" id="docBox">${docsHtml}</div></div>`;
+}
+function readAccess(f) {
+  const fd = new FormData(f);
+  const role = fd.get("role"), clinicId = fd.get("clinicId") || null;
+  if (role !== "admin" && !clinicId) throw new Error("Select a clinic.");
+  return { role, clinicId: role === "admin" ? null : clinicId,
+           doctorIds: role === "assistant" ? fd.getAll("doctorIds") : [] };
 }
 function newUserForm() {
   modal(`<h3>New User</h3>
@@ -155,20 +261,26 @@ function newUserForm() {
       <label>Full name<input name="name" required></label>
       <label>Email<input type="email" name="email" required></label>
       <label>Initial password (min 6)<input type="text" name="password" minlength="6" required autocomplete="off"></label>
-      <label>Role<select name="role"><option value="doctor">Doctor</option><option value="assistant">Doctor Assistant</option><option value="admin">Admin</option></select></label>
-      <label>Clinic<select name="clinicId"><option value="">— select —</option>
-        ${clinics.filter((c) => c.active !== false).map((c) => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join("")}</select></label>
-      <div id="docWrap" hidden><label>Assigned doctors</label><div class="docs" id="docBox"></div></div>
+      ${accessFields()}
       <div class="row"><button type="button" class="ghost" data-act="close">Cancel</button><button>Create</button></div>
+    </form>`);
+}
+function approveForm(u) {
+  modal(`<h3>Approve registration</h3>
+    <p class="muted">${esc(u.email)} · ${esc(providerLabel(u.provider))}</p>
+    <form data-form="approve-user" data-id="${esc(u.id)}">
+      <label>Full name<input name="name" required value="${esc(u.name)}"></label>
+      ${accessFields(u)}
+      <div class="row"><button type="button" class="ghost" data-act="close">Cancel</button><button>Approve</button></div>
     </form>`);
 }
 function editUserForm(u) {
   modal(`<h3>Edit User</h3>
-    <form data-form="edit-user" data-id="${esc(u.id)}" data-role="${esc(u.role)}" data-clinic="${esc(u.clinicId || "")}">
-      <p class="muted">${esc(u.email)} · ${ROLE_LABEL[u.role]}</p>
+    <form data-form="edit-user" data-id="${esc(u.id)}">
+      <p class="muted">${esc(u.email)}</p>
       <label>Full name<input name="name" required value="${esc(u.name)}"></label>
+      ${accessFields(u)}
       <label class="chk"><input type="checkbox" name="active" ${u.active ? "checked" : ""}> Active</label>
-      ${u.role === "assistant" ? `<label>Assigned doctors</label><div class="docs">${doctorBox(u.clinicId, u.doctorIds || [])}</div>` : ""}
       <div class="row"><button type="button" class="ghost" data-act="close">Cancel</button><button>Save</button></div>
     </form>`);
 }
@@ -299,6 +411,12 @@ const actions = {
   "edit-clinic": (d) => clinicForm(clinics.find((c) => c.id === d.id)),
   "new-user": () => newUserForm(),
   "edit-user": (d) => editUserForm(users.find((u) => u.id === d.id)),
+  "approve-user": (d) => approveForm(users.find((u) => u.id === d.id)),
+  "reject-user": async (d) => {
+    if (!confirm("Reject this registration?")) return;
+    await updateDoc(doc(db, "users", d.id), { role: "rejected", active: false });
+    toast("Registration rejected."); await renderUsers();
+  },
   "reset-pw": async (d) => { await sendPasswordResetEmail(auth, d.email); toast("Password reset email sent."); },
   "new-patient": () => patientForm(),
   "edit-patient": (d) => patientForm(patients.find((p) => p.id === d.id)),
@@ -312,11 +430,13 @@ document.addEventListener("click", (e) => {
 });
 document.addEventListener("change", (e) => {
   if (e.target.id === "vDate" && e.target.value) { visitDate = e.target.value; run(renderVisits); }
-  const f = e.target.closest('form[data-form="new-user"]');
-  if (f && (e.target.name === "role" || e.target.name === "clinicId")) {
+  const f = e.target.closest("form");
+  if (f && f.querySelector("#docBox") && (e.target.name === "role" || e.target.name === "clinicId")) {
     const role = f.elements.role.value, cid = f.elements.clinicId.value;
+    const sel = [...f.querySelectorAll('input[name="doctorIds"]:checked')].map((i) => i.value);
     $("#docWrap").hidden = role !== "assistant";
-    $("#docBox").innerHTML = role === "assistant" ? (cid ? doctorBox(cid) : '<span class="muted">Select a clinic first.</span>') : "";
+    $("#docBox").innerHTML = role === "assistant"
+      ? (cid ? doctorBox(cid, sel) : '<span class="muted">Select a clinic first.</span>') : "";
   }
 });
 document.addEventListener("input", (e) => {
@@ -335,23 +455,32 @@ const forms = {
   },
   async "new-user"(f) {
     const fd = new FormData(f);
-    const role = fd.get("role"), clinicId = fd.get("clinicId") || null;
-    if (role !== "admin" && !clinicId) throw new Error("Select a clinic.");
+    const access = readAccess(f);
     const email = fd.get("email").trim();
     const sAuth = getSecondaryAuth();
     const cred = await createUserWithEmailAndPassword(sAuth, email, fd.get("password"));
     await signOut(sAuth);
     await setDoc(doc(db, "users", cred.user.uid), {
-      name: fd.get("name").trim(), email, role, clinicId: role === "admin" ? null : clinicId,
-      doctorIds: role === "assistant" ? fd.getAll("doctorIds") : [], active: true, createdAt: serverTimestamp(),
+      name: fd.get("name").trim(), email, ...access, active: true, provider: "password",
+      createdAt: serverTimestamp(), approvedBy: me.uid,
     });
     closeModal(); toast("User created."); await renderUsers();
   },
+  async "approve-user"(f, id) {
+    const access = readAccess(f);
+    await updateDoc(doc(db, "users", id), {
+      name: new FormData(f).get("name").trim(), ...access, active: true,
+      approvedBy: me.uid, approvedAt: serverTimestamp(),
+    });
+    closeModal(); toast("User approved."); await renderUsers();
+  },
   async "edit-user"(f, id) {
     const fd = new FormData(f);
-    const data = { name: fd.get("name").trim(), active: fd.get("active") === "on" };
-    if (f.dataset.role === "assistant") data.doctorIds = fd.getAll("doctorIds");
-    await updateDoc(doc(db, "users", id), data);
+    const access = readAccess(f);
+    const active = fd.get("active") === "on";
+    if (id === me.uid && (access.role !== "admin" || !active))
+      throw new Error("You cannot remove your own admin access.");
+    await updateDoc(doc(db, "users", id), { name: fd.get("name").trim(), ...access, active });
     closeModal(); toast("Saved."); await renderUsers();
   },
   async patient(f, id) {
