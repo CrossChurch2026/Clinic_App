@@ -70,7 +70,7 @@ document.querySelectorAll("[data-mode]").forEach((b) => b.addEventListener("clic
   mode = b.dataset.mode;
   document.querySelectorAll("[data-mode]").forEach((x) => x.classList.toggle("on", x === b));
   const su = mode === "signup";
-  $("#nameRow").hidden = !su; $("#signupHint").hidden = !su;
+  $("#nameRow").hidden = !su; $("#signupHint").hidden = !su; $("#forgotRow").hidden = su;
   $("#nameRow input").required = su;
   $("#loginSubmit").textContent = su ? "Create account" : "Sign in";
   $("#loginForm").elements.password.autocomplete = su ? "new-password" : "current-password";
@@ -96,6 +96,21 @@ $("#googleBtn").addEventListener("click", async () => {
   catch (err) {
     if (err.code === "auth/popup-closed-by-user" || err.code === "auth/cancelled-popup-request") return;
     setLoginMsg(authMessage(err));
+  }
+});
+$("#forgotBtn").addEventListener("click", async () => {
+  const email = $("#loginForm").elements.email.value.trim();
+  if (!email) { setLoginMsg("Enter your email above, then press Forgot password."); return; }
+  const sent = "If this email is registered, a password reset link has been sent. Check your inbox and spam folder.";
+  try {
+    await sendPasswordResetEmail(auth, email);
+    setLoginMsg(sent, true);
+  } catch (err) {
+    // do not reveal whether the email exists
+    if (err.code === "auth/user-not-found") setLoginMsg(sent, true);
+    else if (err.code === "auth/invalid-email") setLoginMsg("Invalid email address.");
+    else if (err.code === "auth/too-many-requests") setLoginMsg("Too many attempts. Try again later.");
+    else setLoginMsg("Could not send the reset email. Try again.");
   }
 });
 $("#logout").addEventListener("click", () => signOut(auth));
