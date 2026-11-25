@@ -26,7 +26,7 @@ Structure: **Clinic → Doctor → Doctor Assistant**, plus an **Admin** role fo
 ## Doctor-only clinical data
 
 - **Clinical record**: Complaint, Diagnosis, Treatment, Treatment plan. One record per patient **per doctor**, shown inside **every visit** of that patient (and from **Patients → Clinical**). Editing it in any visit updates it for all that patient's visits.
-- **Private notes**: free text for one specific visit.
+- **Notes (this visit only)**: a field inside the same Clinical record box, stored per visit (`doctorNotes`). One Save button saves both.
 - Both are enforced by **Firestore rules**: assistants and admins get `permission-denied` even from the browser console. Another doctor treating the same patient has his own separate record and cannot see yours.
 
 ## Firestore collections

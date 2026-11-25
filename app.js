@@ -353,11 +353,12 @@ async function loadClinical(patientId) {
   const s = await getDoc(doc(db, "patientClinical", `${patientId}_${me.uid}`));
   return s.exists() ? s.data() : {};
 }
-function clinicalFormHtml(patientId, rec = {}, withClose = false) {
-  return `<form data-form="clinical" data-id="${esc(patientId)}" class="private">
+function clinicalFormHtml(patientId, rec = {}, withClose = false, visit = null) {
+  return `<form data-form="clinical" data-id="${esc(patientId)}" data-visit="${esc(visit ? visit.id : "")}" class="private">
     <h4>🔒 Clinical record</h4>
     <p class="muted" style="margin:0 0 8px">Visible only to you. Shown in every visit of this patient.</p>
     ${CLIN_FIELDS.map(([k, l]) => `<label>${l}<textarea name="${k}" style="min-height:72px" autocomplete="off">${esc(rec[k])}</textarea></label>`).join("")}
+    ${visit ? `<label>Notes (this visit only)<textarea name="note" style="min-height:110px" autocomplete="off">${esc(visit.note)}</textarea></label>` : ""}
     <div class="row">${withClose ? '<button type="button" class="ghost" data-act="close">Close</button>' : ""}<button>Save clinical record</button></div>
   </form>`;
 }
@@ -475,14 +476,7 @@ async function openVisit(id) {
       <label>Status<select name="status">${Object.entries(STATUSES).map(([k, l]) => `<option value="${k}" ${v.status === k ? "selected" : ""}>${l}</option>`).join("")}</select></label>
       <div class="row"><button type="button" class="ghost" data-act="close">Close</button><button>Save visit</button></div>
     </form>
-    ${me.role === "doctor" ? `
-    ${clinicalFormHtml(v.patientId, rec)}
-    <form data-form="notes" data-id="${esc(v.id)}" class="private">
-      <h4>🔒 Private notes (this visit)</h4>
-      <p class="muted" style="margin:0 0 8px">Visible only to you. Not visible to assistants or administrators.</p>
-      <textarea name="text" autocomplete="off">${esc(note)}</textarea>
-      <div class="row" style="margin-top:8px"><button>Save notes</button></div>
-    </form>` : ""}`);
+    ${me.role === "doctor" ? clinicalFormHtml(v.patientId, rec, false, { id: v.id, note }) : ""}`);
 }
 
 /* ---------- click / change / input delegation ---------- */
@@ -609,20 +603,19 @@ const forms = {
     visitDate = fd.visitDate;
     closeModal(); toast("Visit saved."); await renderVisits();
   },
-  async notes(f, id) {
-    const text = new FormData(f).get("text");
-    await setDoc(doc(db, "doctorNotes", id), {
-      visitId: id, doctorId: me.uid, clinicId: activeClinicId, text, updatedAt: serverTimestamp(),
-    });
-    toast("Notes saved.");
-  },
   async clinical(f, patientId) {
     const fd = Object.fromEntries(new FormData(f));
-    await setDoc(doc(db, "patientClinical", `${patientId}_${me.uid}`), {
+    const jobs = [setDoc(doc(db, "patientClinical", `${patientId}_${me.uid}`), {
       patientId, doctorId: me.uid, clinicId: activeClinicId,
       complaint: fd.complaint, diagnosis: fd.diagnosis, treatment: fd.treatment, plan: fd.plan,
       updatedAt: serverTimestamp(),
-    });
+    })];
+    // inside a visit, the same Save button also stores that visit's notes
+    const visitId = f.dataset.visit;
+    if (visitId) jobs.push(setDoc(doc(db, "doctorNotes", visitId), {
+      visitId, doctorId: me.uid, clinicId: activeClinicId, text: fd.note || "", updatedAt: serverTimestamp(),
+    }));
+    await Promise.all(jobs);
     toast("Clinical record saved.");
   },
 };
