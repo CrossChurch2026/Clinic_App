@@ -63,7 +63,19 @@ service cloud.firestore {
       allow read:   if isStaff() && resource.data.clinicId in myClinics();
       allow create: if isStaff() && request.resource.data.clinicId in myClinics();
       allow update: if isStaff() && resource.data.clinicId in myClinics()
-                                 && request.resource.data.clinicId == resource.data.clinicId;
+                                 && request.resource.data.clinicId == resource.data.clinicId
+                                 && request.resource.data.get('fileNo', '') == resource.data.get('fileNo', '');
+      allow delete: if false;
+    }
+
+    // ---------- file-number counter (one per clinic) ----------
+    // The app increments it by exactly 1 inside a transaction for every new patient.
+    match /counters/{clinicId} {
+      allow read: if isStaff() && clinicId in myClinics();
+      allow create: if isStaff() && clinicId in myClinics()
+                    && request.resource.data.patients is int && request.resource.data.patients >= 1;
+      allow update: if isStaff() && clinicId in myClinics()
+                    && request.resource.data.patients == resource.data.patients + 1;
       allow delete: if false;
     }
 

@@ -22,6 +22,7 @@ Structure: **Clinic → Doctor → Doctor Assistant**, plus an **Admin** role fo
 
 - Every patient belongs to **one clinic**. When a user has several clinics, the clinic selector in the header decides which clinic's patients and visits are shown and where new patients / visits are created.
 - A person who attends two clinics is two separate patient records (one per clinic).
+- The **file number is automatic**: 00001, 00002, … counted separately for each clinic (`counters/{clinicId}`), assigned when the patient is saved, and read-only afterwards. For a clinic that already has patients, numbering continues after the highest numeric file number already in use.
 
 ## Doctor-only clinical data
 
@@ -33,7 +34,8 @@ Structure: **Clinic → Doctor → Doctor Assistant**, plus an **Admin** role fo
 
 - `clinics/{id}`: name, address, phone, active
 - `users/{uid}`: name, email, role (`pending|rejected|admin|doctor|assistant`), `clinicIds[]`, `doctorIds[]`, `doctors{}` (copy of the assigned doctors' name + clinics, kept by the admin screens), active, provider
-- `patients/{id}`: clinicId, fileNo, fullName, phone, birthDate, gender
+- `patients/{id}`: clinicId, fileNo (automatic), fullName, phone, birthDate, gender
+- `counters/{clinicId}`: patients (last file number issued)
 - `visits/{id}`: clinicId, patientId, patientName, doctorId, doctorName, visitDate, visitTime, visitType, reason, status
 - `doctorNotes/{visitId}`: private note of one visit (owning doctor only)
 - `patientClinical/{patientId}_{doctorId}`: complaint, diagnosis, treatment, plan (that doctor only)

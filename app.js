@@ -4,7 +4,7 @@ import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut,
          GoogleAuthProvider, signInWithPopup }
   from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import { getFirestore, collection, doc, getDoc, getDocs, setDoc, addDoc, updateDoc,
-         deleteField, query, where, serverTimestamp }
+         deleteField, runTransaction, query, where, serverTimestamp }
   from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 import { firebaseConfig } from "./firebase-config.js";
 
@@ -396,7 +396,9 @@ function paintPatients(q) {
 function patientForm(p = {}) {
   modal(`<h3>${p.id ? "Edit" : "New"} Patient</h3>
     <form data-form="patient" data-id="${esc(p.id || "")}">
-      <label>File number<input name="fileNo" value="${esc(p.fileNo)}"></label>
+      ${p.id
+        ? `<label>File number<input value="${esc(p.fileNo)}" readonly disabled></label>`
+        : '<p class="muted" style="margin:0 0 10px">The file number is generated automatically when you save.</p>'}
       <label>Full name<input name="fullName" required value="${esc(p.fullName)}"></label>
       <label>Phone<input name="phone" value="${esc(p.phone)}"></label>
       <label>Birth date<input type="date" name="birthDate" value="${esc(p.birthDate)}"></label>
@@ -573,10 +575,31 @@ const forms = {
   },
   async patient(f, id) {
     const fd = Object.fromEntries(new FormData(f));
-    const data = { fileNo: fd.fileNo.trim(), fullName: fd.fullName.trim(), phone: fd.phone.trim(),
+    const data = { fullName: fd.fullName.trim(), phone: fd.phone.trim(),
                    birthDate: fd.birthDate, gender: fd.gender };
-    if (id) await updateDoc(doc(db, "patients", id), data);
-    else await addDoc(collection(db, "patients"), { ...data, clinicId: activeClinicId, createdBy: me.uid, createdAt: serverTimestamp() });
+    if (id) {
+      await updateDoc(doc(db, "patients", id), data);   // file number never changes
+    } else {
+      // Sequential file number per clinic, taken atomically from counters/{clinicId}
+      const cref = doc(db, "counters", activeClinicId);
+      let base = 0;
+      if (!(await getDoc(cref)).exists()) {
+        // first patient since this feature: continue after the highest numeric file number already used
+        await loadPatients();
+        base = patients.reduce((m, p) => (/^\d+$/.test(p.fileNo || "") ? Math.max(m, parseInt(p.fileNo, 10)) : m), 0);
+      }
+      const pref = doc(collection(db, "patients"));
+      const fileNo = await runTransaction(db, async (tx) => {
+        const snap = await tx.get(cref);
+        const n = (snap.exists() ? snap.data().patients : base) + 1;
+        const no = String(n).padStart(5, "0");
+        tx.set(cref, { clinicId: activeClinicId, patients: n });
+        tx.set(pref, { ...data, fileNo: no, clinicId: activeClinicId, createdBy: me.uid, createdAt: serverTimestamp() });
+        return no;
+      });
+      toast(`Saved. File number ${fileNo}.`);
+      closeModal(); await renderPatients(); return;
+    }
     closeModal(); toast("Saved."); await renderPatients();
   },
   async "new-visit"(f) {
