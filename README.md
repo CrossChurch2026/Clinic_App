@@ -22,7 +22,7 @@ Structure: **Clinic → Doctor → Doctor Assistant**, plus an **Admin** role fo
 
 - Every patient belongs to **one clinic**. When a user has several clinics, the clinic selector in the header decides which clinic's patients and visits are shown and where new patients / visits are created.
 - A person who attends two clinics is two separate patient records (one per clinic).
-- The **file number is automatic**: 00001, 00002, … counted separately for each clinic (`counters/{clinicId}`), assigned when the patient is saved, and read-only afterwards. For a clinic that already has patients, numbering continues after the highest numeric file number already in use.
+- The **file number is automatic**: 00001, 00002, … counted separately for each clinic (`counters/{clinicId}`), assigned when the patient is saved, and read-only afterwards. For a clinic that already has patients, numbering continues after the highest numeric file number already in use. Patients registered before this feature (empty File #) get a number from the **Assign #** button in the table, or all at once from **Assign missing file numbers** (oldest first).
 
 ## Doctor-only clinical data
 

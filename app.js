@@ -374,11 +374,32 @@ async function loadPatients() {
   patients = snap.docs.map((d) => ({ id: d.id, ...d.data() }))
     .sort((a, b) => (a.fullName || "").localeCompare(b.fullName || ""));
 }
+// Takes the next file number of the active clinic (atomic) and lets the caller write it
+// in the same transaction: write(tx, fileNo)
+async function issueFileNo(write) {
+  const cref = doc(db, "counters", activeClinicId);
+  let base = 0;
+  if (!(await getDoc(cref)).exists()) {
+    // first number ever issued in this clinic: continue after the highest numeric file number already used
+    await loadPatients();
+    base = patients.reduce((m, p) => (/^\d+$/.test(p.fileNo || "") ? Math.max(m, parseInt(p.fileNo, 10)) : m), 0);
+  }
+  return runTransaction(db, async (tx) => {
+    const snap = await tx.get(cref);
+    const n = (snap.exists() ? snap.data().patients : base) + 1;
+    const no = String(n).padStart(5, "0");
+    tx.set(cref, { clinicId: activeClinicId, patients: n });
+    write(tx, no);
+    return no;
+  });
+}
 async function renderPatients() {
   await loadPatients();
+  const missing = patients.filter((p) => !p.fileNo).length;
   view.innerHTML = `
     <div class="bar"><h2>Patients</h2>
       <div class="row"><input id="ptSearch" placeholder="Search name / file no / phone" style="width:260px">
+      ${missing ? `<button class="ghost" data-act="assign-all">Assign missing file numbers (${missing})</button>` : ""}
       <button data-act="new-patient">+ New Patient</button></div></div>
     <div id="ptList"></div>`;
   paintPatients("");
@@ -387,7 +408,7 @@ function paintPatients(q) {
   q = q.trim().toLowerCase();
   const list = patients.filter((p) => !q || [p.fullName, p.fileNo, p.phone].join(" ").toLowerCase().includes(q));
   $("#ptList").innerHTML = `<table><thead><tr><th>File #</th><th>Name</th><th>Phone</th><th>Birth date</th><th>Gender</th><th></th></tr></thead><tbody>
-    ${list.map((p) => `<tr><td>${esc(p.fileNo)}</td><td>${esc(p.fullName)}</td><td>${esc(p.phone)}</td>
+    ${list.map((p) => `<tr><td>${p.fileNo ? esc(p.fileNo) : `<button class="sm ghost" data-act="assign-no" data-id="${esc(p.id)}">Assign #</button>`}</td><td>${esc(p.fullName)}</td><td>${esc(p.phone)}</td>
       <td>${esc(p.birthDate)}</td><td>${esc(p.gender)}</td>
       <td class="row"><button class="sm ghost" data-act="edit-patient" data-id="${esc(p.id)}">Edit</button>
       ${me.role === "doctor" ? `<button class="sm" data-act="clinical" data-id="${esc(p.id)}">Clinical</button>` : ""}</td></tr>`).join("")
@@ -499,6 +520,20 @@ const actions = {
   "new-patient": () => patientForm(),
   "edit-patient": (d) => patientForm(patients.find((p) => p.id === d.id)),
   clinical: (d) => openClinical(d.id),
+  "assign-no": async (d) => {
+    const p = patients.find((x) => x.id === d.id);
+    if (!p || p.fileNo) return;
+    const no = await issueFileNo((tx, n) => tx.update(doc(db, "patients", p.id), { fileNo: n }));
+    toast(`File number ${no} assigned.`); await renderPatients();
+  },
+  "assign-all": async () => {
+    // oldest registrations get the lowest numbers
+    const todo = patients.filter((p) => !p.fileNo)
+      .sort((a, b) => ((a.createdAt && a.createdAt.toMillis ? a.createdAt.toMillis() : 0)
+                     - (b.createdAt && b.createdAt.toMillis ? b.createdAt.toMillis() : 0)));
+    for (const p of todo) await issueFileNo((tx, n) => tx.update(doc(db, "patients", p.id), { fileNo: n }));
+    toast(`${todo.length} file number(s) assigned.`); await renderPatients();
+  },
   day: (d) => { visitDate = +d.n === 0 ? today() : shiftDate(visitDate, +d.n); return renderVisits(); },
   "new-visit": () => newVisitForm(),
   "open-visit": (d) => openVisit(d.id),
@@ -581,22 +616,9 @@ const forms = {
       await updateDoc(doc(db, "patients", id), data);   // file number never changes
     } else {
       // Sequential file number per clinic, taken atomically from counters/{clinicId}
-      const cref = doc(db, "counters", activeClinicId);
-      let base = 0;
-      if (!(await getDoc(cref)).exists()) {
-        // first patient since this feature: continue after the highest numeric file number already used
-        await loadPatients();
-        base = patients.reduce((m, p) => (/^\d+$/.test(p.fileNo || "") ? Math.max(m, parseInt(p.fileNo, 10)) : m), 0);
-      }
       const pref = doc(collection(db, "patients"));
-      const fileNo = await runTransaction(db, async (tx) => {
-        const snap = await tx.get(cref);
-        const n = (snap.exists() ? snap.data().patients : base) + 1;
-        const no = String(n).padStart(5, "0");
-        tx.set(cref, { clinicId: activeClinicId, patients: n });
-        tx.set(pref, { ...data, fileNo: no, clinicId: activeClinicId, createdBy: me.uid, createdAt: serverTimestamp() });
-        return no;
-      });
+      const fileNo = await issueFileNo((tx, no) =>
+        tx.set(pref, { ...data, fileNo: no, clinicId: activeClinicId, createdBy: me.uid, createdAt: serverTimestamp() }));
       toast(`Saved. File number ${fileNo}.`);
       closeModal(); await renderPatients(); return;
     }
