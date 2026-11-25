@@ -4,7 +4,7 @@ import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut,
          GoogleAuthProvider, signInWithPopup }
   from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import { getFirestore, collection, doc, getDoc, getDocs, setDoc, addDoc, updateDoc,
-         query, where, serverTimestamp }
+         deleteField, query, where, serverTimestamp }
   from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 import { firebaseConfig } from "./firebase-config.js";
 
@@ -21,13 +21,16 @@ const pad = (n) => String(n).padStart(2, "0");
 const fmtDate = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 const today = () => fmtDate(new Date());
 const shiftDate = (s, n) => { const d = new Date(s + "T00:00:00"); d.setDate(d.getDate() + n); return fmtDate(d); };
+const clinicIdsOf = (u) => u.clinicIds || (u.clinicId ? [u.clinicId] : []);   // old single-clinic accounts still work
 
 const ROLE_LABEL = { admin: "Admin", doctor: "Doctor", assistant: "Assistant", pending: "Pending", rejected: "Rejected" };
 const STATUSES = { SCHEDULED: "Scheduled", CHECKED_IN: "Checked in", IN_PROGRESS: "In progress",
                    COMPLETED: "Completed", CANCELLED: "Cancelled", NO_SHOW: "No show" };
 const VISIT_TYPES = ["First Visit", "Follow-up", "Emergency"];
+const CLIN_FIELDS = [["complaint", "Complaint"], ["diagnosis", "Diagnosis"],
+                     ["treatment", "Treatment"], ["plan", "Treatment plan"]];
 
-let me = null, clinic = null, staff = [];
+let me = null, clinicList = [], activeClinicId = null, currentTab = null;
 let clinics = [], users = [], patients = [], visits = [], visitDate = today();
 let signupName = "";
 
@@ -45,10 +48,16 @@ async function run(fn) {
 }
 function modal(html) { $("#modalBox").innerHTML = html; $("#modal").hidden = false; }
 function closeModal() { $("#modal").hidden = true; $("#modalBox").innerHTML = ""; }
-const nameOf = (id) => (staff.find((s) => s.id === id) || {}).name || "—";
-const doctorsOfMe = () => me.role === "doctor"
-  ? [{ id: me.uid, name: me.name }]
-  : staff.filter((s) => s.role === "doctor" && s.active && (me.doctorIds || []).includes(s.id));
+const doctorName = (v) => v.doctorName
+  || (v.doctorId === me.uid ? me.name : ((me.doctors || {})[v.doctorId] || {}).name) || "—";
+// Doctors the current user can book for in the ACTIVE clinic
+const doctorsOfMe = () => {
+  if (me.role === "doctor") return [{ id: me.uid, name: me.name }];
+  const m = me.doctors || {};
+  return (me.doctorIds || [])
+    .filter((id) => m[id] && (m[id].clinicIds || []).includes(activeClinicId))
+    .map((id) => ({ id, name: m[id].name }));
+};
 
 /* ---------- login / registration ---------- */
 let mode = "signin";
@@ -118,7 +127,8 @@ $("#logout").addEventListener("click", () => signOut(auth));
 onAuthStateChanged(auth, async (user) => {
   closeModal();
   if (!user) {
-    me = clinic = null; staff = []; clinics = []; users = []; patients = []; visits = [];
+    me = null; clinicList = []; activeClinicId = null; currentTab = null;
+    clinics = []; users = []; patients = []; visits = [];
     $("#app").hidden = true; $("#login").hidden = false; view.innerHTML = "";
     return;
   }
@@ -130,7 +140,7 @@ onAuthStateChanged(auth, async (user) => {
     if (!snap.exists()) {
       await setDoc(ref, {
         name: (signupName || user.displayName || user.email).trim(),
-        email: user.email, role: "pending", active: false, clinicId: null, doctorIds: [],
+        email: user.email, role: "pending", active: false, clinicIds: [], doctorIds: [],
         provider: (user.providerData[0] && user.providerData[0].providerId) || "password",
         createdAt: serverTimestamp(),
       });
@@ -150,11 +160,17 @@ onAuthStateChanged(auth, async (user) => {
     }
 
     me = { uid: user.uid, ...d };
+    clinicList = [];
     if (me.role !== "admin") {
-      const c = await getDoc(doc(db, "clinics", me.clinicId));
-      clinic = c.exists() ? { id: c.id, ...c.data() } : null;
-      const s = await getDocs(query(collection(db, "users"), where("clinicId", "==", me.clinicId)));
-      staff = s.docs.map((x) => ({ id: x.id, ...x.data() }));
+      const snaps = await Promise.all(clinicIdsOf(me).map((id) => getDoc(doc(db, "clinics", id))));
+      clinicList = snaps.filter((s) => s.exists() && s.data().active !== false).map((s) => ({ id: s.id, ...s.data() }));
+      if (!clinicList.length) {
+        setLoginMsg("No active clinic is assigned to your account. Contact the administrator.");
+        await signOut(auth); return;
+      }
+      let saved = null;
+      try { saved = localStorage.getItem("activeClinic"); } catch { /* storage unavailable */ }
+      activeClinicId = clinicList.some((c) => c.id === saved) ? saved : clinicList[0].id;
     }
     setLoginMsg("");
     showApp();
@@ -165,9 +181,18 @@ onAuthStateChanged(auth, async (user) => {
   }
 });
 
+function renderClinicBox() {
+  const box = $("#clinicBox");
+  if (me.role === "admin") { box.innerHTML = ""; return; }
+  box.innerHTML = clinicList.length > 1
+    ? `<select id="clinicSel" aria-label="Clinic">${clinicList.map((c) =>
+        `<option value="${esc(c.id)}" ${c.id === activeClinicId ? "selected" : ""}>${esc(c.name)}</option>`).join("")}</select>`
+    : `<span>${esc(clinicList[0].name)}</span>`;
+}
 function showApp() {
   $("#login").hidden = true; $("#app").hidden = false;
-  $("#who").textContent = `${me.name} · ${ROLE_LABEL[me.role]}${clinic ? " · " + clinic.name : ""}`;
+  $("#who").textContent = `${me.name} · ${ROLE_LABEL[me.role]}`;
+  renderClinicBox();
   const tabs = me.role === "admin"
     ? [["clinics", "Clinics"], ["users", "Users"]]
     : [["visits", "Visits"], ["patients", "Patients"]];
@@ -181,6 +206,7 @@ async function refreshPendingBadge() {
   if (b) b.textContent = "Users" + (s.size ? ` (${s.size} pending)` : "");
 }
 async function go(tab) {
+  currentTab = tab;
   document.querySelectorAll("#tabs button").forEach((b) => b.classList.toggle("on", b.dataset.tab === tab));
   view.innerHTML = '<p class="muted">Loading…</p>';
   const map = { clinics: renderClinics, users: renderUsers, visits: renderVisits, patients: renderPatients };
@@ -220,7 +246,7 @@ async function renderUsers() {
   const [cs, us] = await Promise.all([getDocs(collection(db, "clinics")), getDocs(collection(db, "users"))]);
   clinics = cs.docs.map((d) => ({ id: d.id, ...d.data() }));
   users = us.docs.map((d) => ({ id: d.id, ...d.data() }));
-  const clinicName = (id) => (clinics.find((c) => c.id === id) || {}).name || "—";
+  const clinicNames = (u) => clinicIdsOf(u).map((id) => (clinics.find((c) => c.id === id) || {}).name || "?").join(", ") || "—";
   const pending = users.filter((u) => u.role === "pending");
   const others = users.filter((u) => u.role !== "pending");
   const badge = document.querySelector('#tabs [data-tab="users"]');
@@ -236,39 +262,56 @@ async function renderUsers() {
       <button class="sm ghost" data-act="reject-user" data-id="${esc(u.id)}">Reject</button></td></tr>`).join("")}
     </tbody></table>` : ""}
     <div class="bar"><h2>Users</h2><button data-act="new-user">+ New User</button></div>
-    <table><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Clinic</th><th>Status</th><th></th></tr></thead><tbody>
+    <table><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Clinics</th><th>Status</th><th></th></tr></thead><tbody>
     ${others.map((u) => `<tr><td>${esc(u.name)}</td><td>${esc(u.email)}</td><td>${esc(ROLE_LABEL[u.role] || u.role)}</td>
-      <td>${esc(clinicName(u.clinicId))}</td><td>${u.active ? "Active" : "Inactive"}</td>
+      <td>${esc(clinicNames(u))}</td><td>${u.active ? "Active" : "Inactive"}</td>
       <td class="row"><button class="sm ghost" data-act="edit-user" data-id="${esc(u.id)}">Edit</button>
       <button class="sm ghost" data-act="reset-pw" data-email="${esc(u.email)}">Reset password</button></td></tr>`).join("")
       || '<tr><td colspan="6" class="muted">No users.</td></tr>'}
     </tbody></table>`;
 }
-function doctorBox(clinicId, selected = []) {
-  const docs = users.filter((u) => u.role === "doctor" && u.clinicId === clinicId);
-  if (!docs.length) return '<span class="muted">No doctors in this clinic yet. Approve a doctor first.</span>';
+// Doctors that work in at least one of the selected clinics
+function doctorBox(clinicIds, selected = []) {
+  const docs = users.filter((u) => u.role === "doctor" && u.active !== false
+    && clinicIdsOf(u).some((c) => clinicIds.includes(c)));
+  if (!clinicIds.length) return '<span class="muted">Select a clinic first.</span>';
+  if (!docs.length) return '<span class="muted">No doctors in the selected clinics yet. Approve a doctor first.</span>';
   return docs.map((d) => `<label class="chk"><input type="checkbox" name="doctorIds" value="${esc(d.id)}"
     ${selected.includes(d.id) ? "checked" : ""}> ${esc(d.name)}</label>`).join("");
 }
-// Shared role / clinic / assigned-doctors fields (new user, approve, edit)
+// Shared role / clinics / assigned-doctors fields (new user, approve, edit)
 function accessFields(u = {}) {
   const roles = [["doctor", "Doctor"], ["assistant", "Doctor Assistant"], ["admin", "Admin"]];
   const role = roles.some(([k]) => k === u.role) ? u.role : "doctor";
-  const docsHtml = role !== "assistant" ? ""
-    : (u.clinicId ? doctorBox(u.clinicId, u.doctorIds || []) : '<span class="muted">Select a clinic first.</span>');
+  const sel = clinicIdsOf(u);
   return `
     <label>Role<select name="role">${roles.map(([k, l]) => `<option value="${k}" ${role === k ? "selected" : ""}>${l}</option>`).join("")}</select></label>
-    <label>Clinic<select name="clinicId"><option value="">— select —</option>
-      ${clinics.filter((c) => c.active !== false || c.id === u.clinicId)
-        .map((c) => `<option value="${esc(c.id)}" ${u.clinicId === c.id ? "selected" : ""}>${esc(c.name)}</option>`).join("")}</select></label>
-    <div id="docWrap" ${role === "assistant" ? "" : "hidden"}><label>Assigned doctors</label><div class="docs" id="docBox">${docsHtml}</div></div>`;
+    <div id="clinicWrap" ${role === "admin" ? "hidden" : ""}><label>Clinics (can select more than one)</label>
+      <div class="docs">${clinics.filter((c) => c.active !== false || sel.includes(c.id))
+        .map((c) => `<label class="chk"><input type="checkbox" name="clinicIds" value="${esc(c.id)}" ${sel.includes(c.id) ? "checked" : ""}> ${esc(c.name)}</label>`).join("")
+        || '<span class="muted">No clinics yet. Create a clinic first.</span>'}</div></div>
+    <div id="docWrap" ${role === "assistant" ? "" : "hidden"}><label>Assigned doctors</label>
+      <div class="docs" id="docBox">${role === "assistant" ? doctorBox(sel, u.doctorIds || []) : ""}</div></div>`;
 }
 function readAccess(f) {
   const fd = new FormData(f);
-  const role = fd.get("role"), clinicId = fd.get("clinicId") || null;
-  if (role !== "admin" && !clinicId) throw new Error("Select a clinic.");
-  return { role, clinicId: role === "admin" ? null : clinicId,
-           doctorIds: role === "assistant" ? fd.getAll("doctorIds") : [] };
+  const role = fd.get("role");
+  const clinicIds = role === "admin" ? [] : fd.getAll("clinicIds");
+  if (role !== "admin" && !clinicIds.length) throw new Error("Select at least one clinic.");
+  const doctorIds = role === "assistant" ? fd.getAll("doctorIds") : [];
+  // Snapshot of the assigned doctors (name + clinics) stored on the assistant,
+  // so assistants never need to read other users' profiles.
+  const doctors = {};
+  doctorIds.forEach((id) => {
+    const d = users.find((u) => u.id === id);
+    if (d) doctors[id] = { name: d.name, clinicIds: clinicIdsOf(d) };
+  });
+  return { role, clinicIds, doctorIds, doctors };
+}
+// When a doctor's name / clinics change, refresh the copy held by his assistants
+async function syncAssistants(doctorId, name, clinicIds) {
+  const list = users.filter((u) => u.role === "assistant" && (u.doctorIds || []).includes(doctorId));
+  await Promise.all(list.map((a) => updateDoc(doc(db, "users", a.id), { [`doctors.${doctorId}`]: { name, clinicIds } })));
 }
 function newUserForm() {
   modal(`<h3>New User</h3>
@@ -304,9 +347,29 @@ function getSecondaryAuth() {   // lets the admin create accounts without being 
   return getAuth(secondary);
 }
 
-/* ---------- PATIENTS ---------- */
+/* ---------- CLINICAL RECORD (doctor only) ---------- */
+// One record per patient per doctor, shown in every visit of that patient.
+async function loadClinical(patientId) {
+  const s = await getDoc(doc(db, "patientClinical", `${patientId}_${me.uid}`));
+  return s.exists() ? s.data() : {};
+}
+function clinicalFormHtml(patientId, rec = {}, withClose = false) {
+  return `<form data-form="clinical" data-id="${esc(patientId)}" class="private">
+    <h4>🔒 Clinical record</h4>
+    <p class="muted" style="margin:0 0 8px">Visible only to you. Shown in every visit of this patient.</p>
+    ${CLIN_FIELDS.map(([k, l]) => `<label>${l}<textarea name="${k}" style="min-height:72px" autocomplete="off">${esc(rec[k])}</textarea></label>`).join("")}
+    <div class="row">${withClose ? '<button type="button" class="ghost" data-act="close">Close</button>' : ""}<button>Save clinical record</button></div>
+  </form>`;
+}
+async function openClinical(patientId) {
+  const p = patients.find((x) => x.id === patientId) || {};
+  const rec = await loadClinical(patientId);
+  modal(`<h3>${esc(p.fullName)}</h3>` + clinicalFormHtml(patientId, rec, true));
+}
+
+/* ---------- PATIENTS (per clinic) ---------- */
 async function loadPatients() {
-  const snap = await getDocs(query(collection(db, "patients"), where("clinicId", "==", me.clinicId)));
+  const snap = await getDocs(query(collection(db, "patients"), where("clinicId", "==", activeClinicId)));
   patients = snap.docs.map((d) => ({ id: d.id, ...d.data() }))
     .sort((a, b) => (a.fullName || "").localeCompare(b.fullName || ""));
 }
@@ -325,7 +388,8 @@ function paintPatients(q) {
   $("#ptList").innerHTML = `<table><thead><tr><th>File #</th><th>Name</th><th>Phone</th><th>Birth date</th><th>Gender</th><th></th></tr></thead><tbody>
     ${list.map((p) => `<tr><td>${esc(p.fileNo)}</td><td>${esc(p.fullName)}</td><td>${esc(p.phone)}</td>
       <td>${esc(p.birthDate)}</td><td>${esc(p.gender)}</td>
-      <td><button class="sm ghost" data-act="edit-patient" data-id="${esc(p.id)}">Edit</button></td></tr>`).join("")
+      <td class="row"><button class="sm ghost" data-act="edit-patient" data-id="${esc(p.id)}">Edit</button>
+      ${me.role === "doctor" ? `<button class="sm" data-act="clinical" data-id="${esc(p.id)}">Clinical</button>` : ""}</td></tr>`).join("")
       || '<tr><td colspan="6" class="muted">No patients found.</td></tr>'}</tbody></table>`;
 }
 function patientForm(p = {}) {
@@ -356,15 +420,15 @@ async function renderVisits() {
   await loadVisits();
 }
 async function loadVisits() {
-  const ids = me.role === "doctor" ? [me.uid] : (me.doctorIds || []);
-  if (!ids.length) { $("#vList").innerHTML = '<p class="muted">No doctors are assigned to your account.</p>'; return; }
+  const ids = doctorsOfMe().map((d) => d.id);
+  if (!ids.length) { $("#vList").innerHTML = '<p class="muted">No doctors are assigned to your account for this clinic.</p>'; return; }
   // each query is pinned to clinic + one doctor + date, so the security rules can verify it
   const snaps = await Promise.all(ids.map((id) => getDocs(query(collection(db, "visits"),
-    where("clinicId", "==", me.clinicId), where("doctorId", "==", id), where("visitDate", "==", visitDate)))));
+    where("clinicId", "==", activeClinicId), where("doctorId", "==", id), where("visitDate", "==", visitDate)))));
   visits = snaps.flatMap((s) => s.docs.map((d) => ({ id: d.id, ...d.data() })))
     .sort((a, b) => (a.visitTime || "").localeCompare(b.visitTime || ""));
   $("#vList").innerHTML = `<table><thead><tr><th>Time</th><th>Patient</th><th>Doctor</th><th>Type</th><th>Status</th><th></th></tr></thead><tbody>
-    ${visits.map((v) => `<tr><td>${esc(v.visitTime)}</td><td>${esc(v.patientName)}</td><td>${esc(nameOf(v.doctorId))}</td>
+    ${visits.map((v) => `<tr><td>${esc(v.visitTime)}</td><td>${esc(v.patientName)}</td><td>${esc(doctorName(v))}</td>
       <td>${esc(v.visitType)}</td><td><span class="badge st-${esc(v.status)}">${esc(STATUSES[v.status] || v.status)}</span></td>
       <td><button class="sm" data-act="open-visit" data-id="${esc(v.id)}">Open</button></td></tr>`).join("")
       || '<tr><td colspan="6" class="muted">No visits on this date.</td></tr>'}</tbody></table>`;
@@ -372,6 +436,7 @@ async function loadVisits() {
 async function newVisitForm() {
   if (!patients.length) await loadPatients();
   const docs = doctorsOfMe();
+  if (!docs.length) throw new Error("No doctor is assigned to you for this clinic.");
   modal(`<h3>New Visit</h3>
     <form data-form="new-visit">
       <label>Patient<input id="pSearch" placeholder="Type to search…" autocomplete="off"></label>
@@ -394,13 +459,14 @@ function fillPatientSelect(q) {
 }
 async function openVisit(id) {
   const v = visits.find((x) => x.id === id); if (!v) return;
-  let note = "";
-  if (me.role === "doctor") {
-    const n = await getDoc(doc(db, "doctorNotes", v.id));   // only the owning doctor can read this
+  let note = "", rec = {};
+  if (me.role === "doctor") {   // only the owning doctor can read these
+    const [n, r] = await Promise.all([getDoc(doc(db, "doctorNotes", v.id)), loadClinical(v.patientId)]);
     note = n.exists() ? n.data().text || "" : "";
+    rec = r;
   }
   modal(`<h3>${esc(v.patientName)}</h3>
-    <p class="muted">Doctor: ${esc(nameOf(v.doctorId))}</p>
+    <p class="muted">Doctor: ${esc(doctorName(v))}</p>
     <form data-form="visit" data-id="${esc(v.id)}">
       <div class="row"><label style="flex:1">Date<input type="date" name="visitDate" value="${esc(v.visitDate)}" required></label>
       <label style="flex:1">Time<input type="time" name="visitTime" value="${esc(v.visitTime)}" required></label></div>
@@ -410,8 +476,9 @@ async function openVisit(id) {
       <div class="row"><button type="button" class="ghost" data-act="close">Close</button><button>Save visit</button></div>
     </form>
     ${me.role === "doctor" ? `
+    ${clinicalFormHtml(v.patientId, rec)}
     <form data-form="notes" data-id="${esc(v.id)}" class="private">
-      <h4>🔒 Private notes</h4>
+      <h4>🔒 Private notes (this visit)</h4>
       <p class="muted" style="margin:0 0 8px">Visible only to you. Not visible to assistants or administrators.</p>
       <textarea name="text" autocomplete="off">${esc(note)}</textarea>
       <div class="row" style="margin-top:8px"><button>Save notes</button></div>
@@ -435,6 +502,7 @@ const actions = {
   "reset-pw": async (d) => { await sendPasswordResetEmail(auth, d.email); toast("Password reset email sent."); },
   "new-patient": () => patientForm(),
   "edit-patient": (d) => patientForm(patients.find((p) => p.id === d.id)),
+  clinical: (d) => openClinical(d.id),
   day: (d) => { visitDate = +d.n === 0 ? today() : shiftDate(visitDate, +d.n); return renderVisits(); },
   "new-visit": () => newVisitForm(),
   "open-visit": (d) => openVisit(d.id),
@@ -445,13 +513,21 @@ document.addEventListener("click", (e) => {
 });
 document.addEventListener("change", (e) => {
   if (e.target.id === "vDate" && e.target.value) { visitDate = e.target.value; run(renderVisits); }
+  if (e.target.id === "clinicSel") {
+    activeClinicId = e.target.value;
+    try { localStorage.setItem("activeClinic", activeClinicId); } catch { /* storage unavailable */ }
+    patients = []; visits = [];
+    closeModal(); run(() => go(currentTab));
+  }
+  // admin user forms: keep clinic / doctor checkboxes in sync with the chosen role
   const f = e.target.closest("form");
-  if (f && f.querySelector("#docBox") && (e.target.name === "role" || e.target.name === "clinicId")) {
-    const role = f.elements.role.value, cid = f.elements.clinicId.value;
+  if (f && f.querySelector("#docBox") && (e.target.name === "role" || e.target.name === "clinicIds")) {
+    const role = f.elements.role.value;
+    const cids = [...f.querySelectorAll('input[name="clinicIds"]:checked')].map((i) => i.value);
     const sel = [...f.querySelectorAll('input[name="doctorIds"]:checked')].map((i) => i.value);
+    $("#clinicWrap").hidden = role === "admin";
     $("#docWrap").hidden = role !== "assistant";
-    $("#docBox").innerHTML = role === "assistant"
-      ? (cid ? doctorBox(cid, sel) : '<span class="muted">Select a clinic first.</span>') : "";
+    $("#docBox").innerHTML = role === "assistant" ? doctorBox(cids, sel) : "";
   }
 });
 document.addEventListener("input", (e) => {
@@ -483,8 +559,9 @@ const forms = {
   },
   async "approve-user"(f, id) {
     const access = readAccess(f);
+    const name = new FormData(f).get("name").trim();
     await updateDoc(doc(db, "users", id), {
-      name: new FormData(f).get("name").trim(), ...access, active: true,
+      name, ...access, clinicId: deleteField(), active: true,
       approvedBy: me.uid, approvedAt: serverTimestamp(),
     });
     closeModal(); toast("User approved."); await renderUsers();
@@ -493,25 +570,30 @@ const forms = {
     const fd = new FormData(f);
     const access = readAccess(f);
     const active = fd.get("active") === "on";
+    const name = fd.get("name").trim();
     if (id === me.uid && (access.role !== "admin" || !active))
       throw new Error("You cannot remove your own admin access.");
-    await updateDoc(doc(db, "users", id), { name: fd.get("name").trim(), ...access, active });
+    await updateDoc(doc(db, "users", id), { name, ...access, clinicId: deleteField(), active });
+    if (access.role === "doctor") await syncAssistants(id, name, access.clinicIds);
     closeModal(); toast("Saved."); await renderUsers();
   },
   async patient(f, id) {
     const fd = Object.fromEntries(new FormData(f));
     const data = { fileNo: fd.fileNo.trim(), fullName: fd.fullName.trim(), phone: fd.phone.trim(),
-                   birthDate: fd.birthDate, gender: fd.gender, clinicId: me.clinicId };
+                   birthDate: fd.birthDate, gender: fd.gender };
     if (id) await updateDoc(doc(db, "patients", id), data);
-    else await addDoc(collection(db, "patients"), { ...data, createdBy: me.uid, createdAt: serverTimestamp() });
+    else await addDoc(collection(db, "patients"), { ...data, clinicId: activeClinicId, createdBy: me.uid, createdAt: serverTimestamp() });
     closeModal(); toast("Saved."); await renderPatients();
   },
   async "new-visit"(f) {
     const fd = Object.fromEntries(new FormData(f));
     const p = patients.find((x) => x.id === fd.patientId);
     if (!p) throw new Error("Select a patient.");
+    const d = doctorsOfMe().find((x) => x.id === fd.doctorId);
+    if (!d) throw new Error("Select a doctor.");
     await addDoc(collection(db, "visits"), {
-      clinicId: me.clinicId, patientId: p.id, patientName: p.fullName, doctorId: fd.doctorId,
+      clinicId: activeClinicId, patientId: p.id, patientName: p.fullName,
+      doctorId: d.id, doctorName: d.name,
       visitDate: fd.visitDate, visitTime: fd.visitTime, visitType: fd.visitType, reason: fd.reason.trim(),
       status: "SCHEDULED", createdBy: me.uid, createdAt: serverTimestamp(),
     });
@@ -530,9 +612,18 @@ const forms = {
   async notes(f, id) {
     const text = new FormData(f).get("text");
     await setDoc(doc(db, "doctorNotes", id), {
-      visitId: id, doctorId: me.uid, clinicId: me.clinicId, text, updatedAt: serverTimestamp(),
+      visitId: id, doctorId: me.uid, clinicId: activeClinicId, text, updatedAt: serverTimestamp(),
     });
     toast("Notes saved.");
+  },
+  async clinical(f, patientId) {
+    const fd = Object.fromEntries(new FormData(f));
+    await setDoc(doc(db, "patientClinical", `${patientId}_${me.uid}`), {
+      patientId, doctorId: me.uid, clinicId: activeClinicId,
+      complaint: fd.complaint, diagnosis: fd.diagnosis, treatment: fd.treatment, plan: fd.plan,
+      updatedAt: serverTimestamp(),
+    });
+    toast("Clinical record saved.");
   },
 };
 document.addEventListener("submit", (e) => {

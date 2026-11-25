@@ -58,6 +58,8 @@
   .modes { display:flex; gap:4px; margin-bottom:14px; }
   .modes button { flex:1; background:#e6ebf0; color:var(--ink); }
   .modes button.on { background:var(--brand); color:#fff; }
+  #clinicBox select { width:auto; padding:4px 8px; font-size:14px; }
+  #clinicBox span { background:rgba(255,255,255,.18); padding:4px 10px; border-radius:6px; font-size:14px; }
   button.link { background:none; color:var(--brand); padding:2px 0; font-size:13px; text-decoration:underline; }
   #modal { position:fixed; inset:0; background:rgba(15,23,32,.5); display:flex; align-items:flex-start; justify-content:center; padding:5vh 12px; overflow:auto; z-index:10; }
   #modalBox { background:var(--card); border-radius:10px; padding:20px; width:min(560px,100%); }
@@ -107,7 +109,7 @@
 <div id="app" hidden>
   <header>
     <span class="title">Clinic Visits</span>
-    <span class="row"><span id="who"></span><button class="sm" id="logout">Sign out</button></span>
+    <span class="row"><span id="clinicBox"></span><span id="who"></span><button class="sm" id="logout">Sign out</button></span>
   </header>
   <nav id="tabs"></nav>
   <main id="view"></main>
