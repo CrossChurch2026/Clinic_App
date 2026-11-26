@@ -58,6 +58,8 @@
   .modes { display:flex; gap:4px; margin-bottom:14px; }
   .modes button { flex:1; background:#e6ebf0; color:var(--ink); }
   .modes button.on { background:var(--brand); color:#fff; }
+  #boot { text-align:center; margin:28vh auto 0; }
+  #boot p { margin:10px 0 0; }
   #clinicBox select { width:auto; padding:4px 8px; font-size:14px; }
   #clinicBox span { background:rgba(255,255,255,.18); padding:4px 10px; border-radius:6px; font-size:14px; }
   button.link { background:none; color:var(--brand); padding:2px 0; font-size:13px; text-decoration:underline; }
@@ -86,7 +88,9 @@
 </head>
 <body>
 
-<section id="login" class="card">
+<div id="boot"><img src="icons/icon-192.png" width="72" height="72" alt="" style="border-radius:18px"><p class="muted">Loading…</p></div>
+
+<section id="login" class="card" hidden>
   <img src="icons/icon-192.png" width="84" height="84" alt="" style="display:block;margin:0 auto 10px;border-radius:20px">
   <h2 style="text-align:center">Clinic Visits</h2>
   <button type="button" id="googleBtn" class="google" style="margin-top:16px">Continue with Google</button>

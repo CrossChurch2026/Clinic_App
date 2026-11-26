@@ -129,7 +129,7 @@ onAuthStateChanged(auth, async (user) => {
   if (!user) {
     me = null; clinicList = []; activeClinicId = null; currentTab = null;
     clinics = []; users = []; patients = []; visits = [];
-    $("#app").hidden = true; $("#login").hidden = false; view.innerHTML = "";
+    $("#boot").hidden = true; $("#app").hidden = true; $("#login").hidden = false; view.innerHTML = "";
     try { history.replaceState(null, "", location.pathname + location.search); } catch { /* ignore */ }
     return;
   }
@@ -191,7 +191,7 @@ function renderClinicBox() {
     : `<span>${esc(clinicList[0].name)}</span>`;
 }
 function showApp() {
-  $("#login").hidden = true; $("#app").hidden = false;
+  $("#boot").hidden = true; $("#login").hidden = true; $("#app").hidden = false;
   $("#who").textContent = `${me.name} · ${ROLE_LABEL[me.role]}`;
   renderClinicBox();
   const tabs = me.role === "admin"
