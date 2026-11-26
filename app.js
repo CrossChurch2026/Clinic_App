@@ -130,6 +130,7 @@ onAuthStateChanged(auth, async (user) => {
     me = null; clinicList = []; activeClinicId = null; currentTab = null;
     clinics = []; users = []; patients = []; visits = [];
     $("#app").hidden = true; $("#login").hidden = false; view.innerHTML = "";
+    try { history.replaceState(null, "", location.pathname + location.search); } catch { /* ignore */ }
     return;
   }
   try {
@@ -197,7 +198,9 @@ function showApp() {
     ? [["clinics", "Clinics"], ["users", "Users"]]
     : [["visits", "Visits"], ["patients", "Patients"]];
   $("#tabs").innerHTML = tabs.map(([k, l]) => `<button data-act="tab" data-tab="${k}">${l}</button>`).join("");
-  go(tabs[0][0]);
+  // reopen the tab that was open before a refresh (kept in the URL hash, e.g. #patients)
+  const wanted = location.hash.slice(1);
+  go(tabs.some(([k]) => k === wanted) ? wanted : tabs[0][0]);
   if (me.role === "admin") run(refreshPendingBadge);
 }
 async function refreshPendingBadge() {
@@ -207,6 +210,7 @@ async function refreshPendingBadge() {
 }
 async function go(tab) {
   currentTab = tab;
+  try { history.replaceState(null, "", "#" + tab); } catch { /* ignore */ }
   document.querySelectorAll("#tabs button").forEach((b) => b.classList.toggle("on", b.dataset.tab === tab));
   view.innerHTML = '<p class="muted">Loading…</p>';
   const map = { clinics: renderClinics, users: renderUsers, visits: renderVisits, patients: renderPatients };
